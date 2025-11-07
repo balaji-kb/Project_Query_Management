@@ -1,0 +1,78 @@
+name: Build, Test, Scan and Push to ECR
+
+on:
+  push:
+    branches:
+      - dev
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1️⃣ Checkout code
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      # 2️⃣ Set up Python environment (for tests)
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      # 3️⃣ Install dependencies
+      - name: Install dependencies
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
+      # 4️⃣ Run automated tests
+      - name: Run Unit Tests
+        run: |
+          if [ -d tests ]; then
+            pytest tests/ --maxfail=1 --disable-warnings -q
+          else
+            echo "No tests folder found, skipping tests."
+          fi
+
+      # 5️⃣ Configure AWS credentials
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      # 6️⃣ Login to Amazon ECR
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # 7️⃣ Build Docker image
+      - name: Build Docker image
+        run: |
+          docker build -t query_app:latest .
+
+      # 8️⃣ Run Trivy Security Scan
+      - name: Security Scan with Trivy
+        uses: aquasecurity/trivy-action@0.11.2
+        with:
+          image-ref: query_app:latest
+          format: 'table'
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+
+      # 9️⃣ Tag and push Docker image to Amazon ECR
+      - name: Tag and push Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: query_app_apsoutheast
+          IMAGE_TAG: dev-${{ github.run_number }}
+        run: |
+          docker tag query_app:latest $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+      # 🔟 Confirm push success
+      - name: Image pushed successfully
+        run: echo "✅ Image pushed to ECR as ${{ steps.login-ecr.outputs.registry }}/query_app_apsoutheast:dev-${{ github.run_number }}"
